@@ -3,7 +3,7 @@ package health
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -58,7 +58,9 @@ func TestReadyHandler_NotReady(t *testing.T) {
 	}
 
 	var resp StatusResponse
-	json.NewDecoder(w.Body).Decode(&resp)
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
 	if resp.Status != "not ready" {
 		t.Errorf("status = %q, want %q", resp.Status, "not ready")
 	}
@@ -78,7 +80,9 @@ func TestReadyHandler_Ready(t *testing.T) {
 	}
 
 	var resp StatusResponse
-	json.NewDecoder(w.Body).Decode(&resp)
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
 	if resp.Status != "ready" {
 		t.Errorf("status = %q, want %q", resp.Status, "ready")
 	}
@@ -103,7 +107,9 @@ func TestReadyHandler_FailedCheck(t *testing.T) {
 	}
 
 	var resp StatusResponse
-	json.NewDecoder(w.Body).Decode(&resp)
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
 	if resp.Status != "not ready" {
 		t.Errorf("status = %q, want %q", resp.Status, "not ready")
 	}
@@ -137,7 +143,9 @@ func TestReadyHandler_PassingCheck(t *testing.T) {
 	}
 
 	var resp StatusResponse
-	json.NewDecoder(w.Body).Decode(&resp)
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
 	if resp.Checks["redis"].Status != "ok" {
 		t.Errorf("redis check status = %q, want %q", resp.Checks["redis"].Status, "ok")
 	}
@@ -193,7 +201,7 @@ func TestReloadHandler_Success(t *testing.T) {
 func TestReloadHandler_Error(t *testing.T) {
 	s := newTestServer()
 	s.SetReloadFunc(func() error {
-		return fmt.Errorf("config parse error")
+		return errors.New("config parse error")
 	})
 
 	req := httptest.NewRequest(http.MethodPost, "/reload", nil)
@@ -249,7 +257,9 @@ func TestRegisterCheck_MultipleChecks(t *testing.T) {
 	}
 
 	var resp StatusResponse
-	json.NewDecoder(w.Body).Decode(&resp)
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
 	if len(resp.Checks) != 3 {
 		t.Errorf("checks count = %d, want 3", len(resp.Checks))
 	}
