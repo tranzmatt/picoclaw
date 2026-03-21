@@ -747,4 +747,5 @@ User Groups:
 
 discord: <https://discord.gg/V4sAZ9XWpN>
 
-<img src="assets/wechat.png" alt="PicoClaw" width="512">
+WeChat:
+<img src="assets/wechat.png" alt="WeChat group QR code" width="512">
