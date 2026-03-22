@@ -56,6 +56,7 @@ type AgentLoop struct {
 	mcp            mcpRuntime
 	hookRuntime    hookRuntime
 	steering       *steeringQueue
+	pendingSkills  sync.Map
 	mu             sync.RWMutex
 
 	// Concurrent turn management (from HEAD)
@@ -77,6 +78,7 @@ type processOptions struct {
 	SenderID                string              // Current sender ID for dynamic context
 	SenderDisplayName       string              // Current sender display name for dynamic context
 	UserMessage             string              // User message content (may include prefix)
+	ForcedSkills            []string            // Skills explicitly requested for this message
 	SystemPromptOverride    string              // Override the default system prompt (Used by SubTurns)
 	Media                   []string            // media:// refs from inbound message
 	InitialSteeringMessages []providers.Message // Steering messages from refactor/agent
@@ -1310,6 +1312,15 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		return response, nil
 	}
 
+	if pending := al.takePendingSkills(opts.SessionKey); len(pending) > 0 {
+		opts.ForcedSkills = append(opts.ForcedSkills, pending...)
+		logger.InfoCF("agent", "Applying pending skill override",
+			map[string]any{
+				"session_key": opts.SessionKey,
+				"skills":      strings.Join(pending, ","),
+			})
+	}
+
 	return al.runAgentLoop(ctx, agent, opts)
 }
 
@@ -1454,36 +1465,10 @@ func (al *AgentLoop) runAgentLoop(
 
 	ts := newTurnState(agent, opts, al.newTurnEventScope(agent.ID, opts.SessionKey))
 	result, err := al.runTurn(ctx, ts)
-	// Resolve media:// refs: images→base64 data URLs, non-images→local paths in content
-	cfg := al.GetConfig()
-	maxMediaSize := cfg.Agents.Defaults.GetMaxMediaSize()
-	messages = resolveMediaRefs(messages, al.mediaStore, maxMediaSize)
-
-	// 2. Save user message to session
-	agent.Sessions.AddMessage(opts.SessionKey, "user", opts.UserMessage)
-
-	// 3. Run LLM iteration loop
-	finalContent, iteration, responseHandled, err := al.runLLMIteration(ctx, agent, messages, opts)
 	if err != nil {
 		return "", err
 	}
 	if result.status == TurnEndStatusAborted {
-		return "", nil
-	}
-
-	if responseHandled {
-		agent.Sessions.Save(opts.SessionKey)
-
-		if opts.EnableSummary {
-			al.maybeSummarize(agent, opts.SessionKey, opts.Channel, opts.ChatID)
-		}
-
-		logger.InfoCF("agent", "Response already handled by tool output",
-			map[string]any{
-				"agent_id":    agent.ID,
-				"session_key": opts.SessionKey,
-				"iterations":  iteration,
-			})
 		return "", nil
 	}
 
@@ -1575,8 +1560,6 @@ func (al *AgentLoop) handleReasoning(
 	}
 }
 
-const handledToolResponseSummary = "Requested output delivered via tool attachment."
-
 func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, error) {
 	turnCtx, turnCancel := context.WithCancel(ctx)
 	defer turnCancel()
@@ -1631,6 +1614,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 		ts.chatID,
 		ts.opts.SenderID,
 		ts.opts.SenderDisplayName,
+		activeSkillNames(ts.agent, ts.opts)...,
 	)
 
 	cfg := al.GetConfig()
@@ -1660,6 +1644,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 				newHistory, newSummary, ts.userMessage,
 				ts.media, ts.channel, ts.chatID,
 				ts.opts.SenderID, ts.opts.SenderDisplayName,
+				activeSkillNames(ts.agent, ts.opts)...,
 			)
 			messages = resolveMediaRefs(messages, al.mediaStore, maxMediaSize)
 		}
@@ -1682,59 +1667,8 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 
 	activeCandidates, activeModel := al.selectCandidates(ts.agent, ts.userMessage, messages)
 	pendingMessages := append([]providers.Message(nil), ts.opts.InitialSteeringMessages...)
-const handledToolResponseSummary = "Requested output delivered via tool attachment."
-
-func (al *AgentLoop) buildOutboundMediaMessage(
-	channel string,
-	chatID string,
-	refs []string,
-) bus.OutboundMediaMessage {
-	parts := make([]bus.MediaPart, 0, len(refs))
-	for _, ref := range refs {
-		part := bus.MediaPart{Ref: ref}
-		if al.mediaStore != nil {
-			if _, meta, err := al.mediaStore.ResolveWithMeta(ref); err == nil {
-				part.Filename = meta.Filename
-				part.ContentType = meta.ContentType
-				part.Type = inferMediaType(meta.Filename, meta.ContentType)
-			}
-		}
-		parts = append(parts, part)
-	}
-	return bus.OutboundMediaMessage{
-		Channel: channel,
-		ChatID:  chatID,
-		Parts:   parts,
-	}
-}
-
-func (al *AgentLoop) buildArtifactTags(refs []string) []string {
-	if al.mediaStore == nil || len(refs) == 0 {
-		return nil
-	}
-
-	tags := make([]string, 0, len(refs))
-	for _, ref := range refs {
-		localPath, meta, err := al.mediaStore.ResolveWithMeta(ref)
-		if err != nil {
-			continue
-		}
-		mime := detectMIME(localPath, meta)
-		tags = append(tags, buildPathTag(mime, localPath))
-	}
-	return tags
-}
-
-// runLLMIteration executes the LLM call loop with tool handling.
-// Returns (finalContent, iteration, responseHandled, error).
-func (al *AgentLoop) runLLMIteration(
-	ctx context.Context,
-	agent *AgentInstance,
-	messages []providers.Message,
-	opts processOptions,
-) (string, int, bool, error) {
-	iteration := 0
 	var finalContent string
+	const handledToolResponseSummary = "Requested output delivered via tool attachment."
 
 turnLoop:
 	for ts.currentIteration() < ts.agent.MaxIterations || len(pendingMessages) > 0 || func() bool {
@@ -2078,6 +2012,7 @@ turnLoop:
 					newHistory, newSummary, "",
 					nil, ts.channel, ts.chatID,
 					"", "", // Empty SenderID and SenderDisplayName for retry
+					activeSkillNames(ts.agent, ts.opts)...,
 				)
 				callMessages = messages
 				if gracefulTerminal {
@@ -2138,7 +2073,6 @@ turnLoop:
 			if response.Usage != nil {
 				innerTS.SetLastUsage(response.Usage)
 			}
-			return "", iteration, false, fmt.Errorf("LLM call failed after retries: %w", err)
 		}
 
 		go al.handleReasoning(
@@ -2189,7 +2123,6 @@ turnLoop:
 					"agent_id":      ts.agent.ID,
 					"iteration":     iteration,
 					"content_chars": len(finalContent),
-					"streamed":      streamer != nil,
 				})
 			break
 		}
@@ -2211,6 +2144,7 @@ turnLoop:
 				"iteration": iteration,
 			})
 
+		allResponsesHandled := len(normalizedToolCalls) > 0
 		assistantMsg := providers.Message{
 			Role:             "assistant",
 			Content:          response.Content,
@@ -2460,18 +2394,11 @@ turnLoop:
 			if toolResult == nil {
 				toolResult = tools.ErrorResult("hook returned nil tool result")
 			}
-
-			if !toolResult.Silent && toolResult.ForUser != "" && ts.opts.SendResponse {
-		allResponsesHandled := len(agentResults) > 0
-
-		// Process results in original order (send to user, save to session)
-		for _, r := range agentResults {
-			if !r.result.ResponseHandled {
+			if !toolResult.ResponseHandled {
 				allResponsesHandled = false
 			}
 
-			// Send ForUser content to user immediately if not Silent
-			if !r.result.Silent && r.result.ForUser != "" && opts.SendResponse {
+			if !toolResult.Silent && toolResult.ForUser != "" && ts.opts.SendResponse {
 				al.bus.PublishOutbound(ctx, bus.OutboundMessage{
 					Channel: ts.channel,
 					ChatID:  ts.chatID,
@@ -2493,24 +2420,7 @@ turnLoop:
 							part.Filename = meta.Filename
 							part.ContentType = meta.ContentType
 							part.Type = inferMediaType(meta.Filename, meta.ContentType)
-			// If tool returned media refs, publish them as outbound media only when the
-			// tool explicitly marked the user-visible delivery as already handled.
-			if len(r.result.Media) > 0 {
-				outboundMedia := al.buildOutboundMediaMessage(opts.Channel, opts.ChatID, r.result.Media)
-				if r.result.ResponseHandled {
-					if al.channelManager != nil {
-						if err := al.channelManager.SendMedia(ctx, outboundMedia); err != nil {
-							allResponsesHandled = false
-							logger.WarnCF("agent", "Synchronous media send failed, falling back to bus delivery",
-								map[string]any{
-									"agent_id": agent.ID,
-									"tool":     r.tc.Name,
-									"error":    err.Error(),
-								})
-							al.bus.PublishOutboundMedia(ctx, outboundMedia)
 						}
-					} else {
-						al.bus.PublishOutboundMedia(ctx, outboundMedia)
 					}
 					parts = append(parts, part)
 				}
@@ -2521,14 +2431,10 @@ turnLoop:
 				})
 			}
 
-			contentForLLM := toolResult.ForLLM
-			if contentForLLM == "" && toolResult.Err != nil {
-				contentForLLM = toolResult.Err.Error()
-			// Determine content for LLM based on tool result
-			if len(r.result.Media) > 0 && !r.result.ResponseHandled {
-				r.result.ArtifactTags = al.buildArtifactTags(r.result.Media)
+			if len(toolResult.Media) > 0 && !toolResult.ResponseHandled {
+				toolResult.ArtifactTags = buildArtifactTags(al.mediaStore, toolResult.Media)
 			}
-			contentForLLM := r.result.ContentForLLM()
+			contentForLLM := toolResult.ContentForLLM()
 
 			toolResultMsg := providers.Message{
 				Role:       "tool",
@@ -2617,31 +2523,48 @@ turnLoop:
 			}
 		}
 
-		ts.agent.Tools.TickTTL()
 		if allResponsesHandled {
 			summaryMsg := providers.Message{
 				Role:    "assistant",
 				Content: handledToolResponseSummary,
 			}
 			messages = append(messages, summaryMsg)
-			agent.Sessions.AddFullMessage(opts.SessionKey, summaryMsg)
+			if !ts.opts.NoHistory {
+				ts.agent.Sessions.AddMessage(ts.sessionKey, summaryMsg.Role, summaryMsg.Content)
+				ts.recordPersistedMessage(summaryMsg)
+				if err := ts.agent.Sessions.Save(ts.sessionKey); err != nil {
+					turnStatus = TurnEndStatusError
+					al.emitEvent(
+						EventKindError,
+						ts.eventMeta("runTurn", "turn.error"),
+						ErrorPayload{
+							Stage:   "session_save",
+							Message: err.Error(),
+						},
+					)
+					return turnResult{}, err
+				}
+			}
+			if ts.opts.EnableSummary {
+				al.maybeSummarize(ts.agent, ts.sessionKey, ts.scope)
+			}
 
+			ts.setPhase(TurnPhaseCompleted)
+			ts.setFinalContent("")
 			logger.InfoCF("agent", "Tool output satisfied delivery; ending turn without follow-up LLM",
 				map[string]any{
-					"agent_id":   agent.ID,
+					"agent_id":   ts.agent.ID,
 					"iteration":  iteration,
-					"tool_count": len(agentResults),
+					"tool_count": len(normalizedToolCalls),
 				})
-			return "", iteration, true, nil
+			return turnResult{
+				finalContent: "",
+				status:       turnStatus,
+				followUps:    append([]bus.InboundMessage(nil), ts.followUps...),
+			}, nil
 		}
 
-		// Tick down TTL of discovered tools after processing tool results.
-		// Only reached when tool calls were made (the loop continues);
-		// the break on no-tool-call responses skips this.
-		// NOTE: This is safe because processMessage is sequential per agent.
-		// If per-agent concurrency is added, TTL consistency between
-		// ToProviderDefs and Get must be re-evaluated.
-		agent.Tools.TickTTL()
+		ts.agent.Tools.TickTTL()
 		logger.DebugCF("agent", "TTL tick after tool execution", map[string]any{
 			"agent_id": ts.agent.ID, "iteration": iteration,
 		})
@@ -2664,7 +2587,6 @@ turnLoop:
 		return al.abortTurn(ts)
 	}
 
-	return finalContent, iteration, false, nil
 	if finalContent == "" {
 		if ts.currentIteration() >= ts.agent.MaxIterations && ts.agent.MaxIterations > 0 {
 			finalContent = toolLimitResponse
@@ -3212,6 +3134,10 @@ func (al *AgentLoop) handleCommand(
 		return "", false
 	}
 
+	if matched, handled, reply := al.applyExplicitSkillCommand(msg.Content, agent, opts); matched {
+		return reply, handled
+	}
+
 	if al.cmdRegistry == nil {
 		return "", false
 	}
@@ -3243,6 +3169,97 @@ func (al *AgentLoop) handleCommand(
 	default: // OutcomePassthrough — let the message fall through to LLM
 		return "", false
 	}
+}
+
+func activeSkillNames(agent *AgentInstance, opts processOptions) []string {
+	if agent == nil {
+		return nil
+	}
+
+	combined := make([]string, 0, len(agent.SkillsFilter)+len(opts.ForcedSkills))
+	combined = append(combined, agent.SkillsFilter...)
+	combined = append(combined, opts.ForcedSkills...)
+	if len(combined) == 0 {
+		return nil
+	}
+
+	var resolved []string
+	seen := make(map[string]struct{}, len(combined))
+	for _, name := range combined {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if agent.ContextBuilder != nil {
+			if canonical, ok := agent.ContextBuilder.ResolveSkillName(name); ok {
+				name = canonical
+			}
+		}
+		key := strings.ToLower(name)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		resolved = append(resolved, name)
+	}
+
+	return resolved
+}
+
+func (al *AgentLoop) applyExplicitSkillCommand(
+	raw string,
+	agent *AgentInstance,
+	opts *processOptions,
+) (matched bool, handled bool, reply string) {
+	cmdName, ok := commands.CommandName(raw)
+	if !ok || cmdName != "use" {
+		return false, false, ""
+	}
+
+	if agent == nil || agent.ContextBuilder == nil {
+		return true, true, commandsUnavailableSkillMessage()
+	}
+
+	parts := strings.Fields(strings.TrimSpace(raw))
+	if len(parts) < 2 {
+		return true, true, buildUseCommandHelp(agent)
+	}
+
+	arg := strings.TrimSpace(parts[1])
+	if strings.EqualFold(arg, "clear") || strings.EqualFold(arg, "off") {
+		if opts != nil {
+			al.clearPendingSkills(opts.SessionKey)
+		}
+		return true, true, "Cleared pending skill override."
+	}
+
+	skillName, ok := agent.ContextBuilder.ResolveSkillName(arg)
+	if !ok {
+		return true, true, fmt.Sprintf("Unknown skill %q.\n\n%s", arg, buildUseCommandHelp(agent))
+	}
+
+	if len(parts) < 3 {
+		if opts == nil || strings.TrimSpace(opts.SessionKey) == "" {
+			return true, true, commandsUnavailableSkillMessage()
+		}
+		al.setPendingSkills(opts.SessionKey, []string{skillName})
+		return true, true, fmt.Sprintf(
+			"Skill %q is armed for your next message. Send your next prompt normally, or use /use clear to cancel.",
+			skillName,
+		)
+	}
+
+	message := strings.TrimSpace(strings.Join(parts[2:], " "))
+	if message == "" {
+		return true, true, buildUseCommandHelp(agent)
+	}
+
+	if opts != nil {
+		opts.ForcedSkills = append(opts.ForcedSkills, skillName)
+		opts.UserMessage = message
+	}
+
+	return true, false, ""
 }
 
 func (al *AgentLoop) buildCommandsRuntime(agent *AgentInstance, opts *processOptions) *commands.Runtime {
@@ -3282,6 +3299,7 @@ func (al *AgentLoop) buildCommandsRuntime(agent *AgentInstance, opts *processOpt
 		return al.reloadFunc()
 	}
 	if agent != nil {
+		rt.ListSkillNames = agent.ContextBuilder.ListSkillNames
 		rt.GetModelInfo = func() (string, string) {
 			return agent.Model, resolvedCandidateProvider(agent.Candidates, cfg.Agents.Defaults.Provider)
 		}
@@ -3332,6 +3350,74 @@ func (al *AgentLoop) buildCommandsRuntime(agent *AgentInstance, opts *processOpt
 		}
 	}
 	return rt
+}
+
+func commandsUnavailableSkillMessage() string {
+	return "Skill commands are unavailable in the current context."
+}
+
+func buildUseCommandHelp(agent *AgentInstance) string {
+	usage := "Usage:\n/use <skill> <message>\n/use <skill>\n/use clear"
+	if agent == nil || agent.ContextBuilder == nil {
+		return usage
+	}
+
+	names := agent.ContextBuilder.ListSkillNames()
+	if len(names) == 0 {
+		return "No installed skills.\n\n" + usage
+	}
+
+	return fmt.Sprintf("%s\n\nInstalled Skills:\n- %s", usage, strings.Join(names, "\n- "))
+}
+
+func (al *AgentLoop) setPendingSkills(sessionKey string, skillNames []string) {
+	sessionKey = strings.TrimSpace(sessionKey)
+	if sessionKey == "" || len(skillNames) == 0 {
+		return
+	}
+
+	values := make([]string, 0, len(skillNames))
+	for _, name := range skillNames {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		values = append(values, name)
+	}
+	if len(values) == 0 {
+		return
+	}
+
+	al.pendingSkills.Store(sessionKey, values)
+}
+
+func (al *AgentLoop) takePendingSkills(sessionKey string) []string {
+	sessionKey = strings.TrimSpace(sessionKey)
+	if sessionKey == "" {
+		return nil
+	}
+
+	value, ok := al.pendingSkills.LoadAndDelete(sessionKey)
+	if !ok {
+		return nil
+	}
+
+	skills, ok := value.([]string)
+	if !ok || len(skills) == 0 {
+		return nil
+	}
+
+	out := make([]string, len(skills))
+	copy(out, skills)
+	return out
+}
+
+func (al *AgentLoop) clearPendingSkills(sessionKey string) {
+	sessionKey = strings.TrimSpace(sessionKey)
+	if sessionKey == "" {
+		return
+	}
+	al.pendingSkills.Delete(sessionKey)
 }
 
 func mapCommandError(result commands.ExecuteResult) string {

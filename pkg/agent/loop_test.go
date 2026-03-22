@@ -132,6 +132,86 @@ func TestProcessMessage_IncludesCurrentSenderInDynamicContext(t *testing.T) {
 	}
 }
 
+func TestApplyExplicitSkillCommand_ArmsSkillForNextMessage(t *testing.T) {
+	al, cfg, _, _, cleanup := newTestAgentLoop(t)
+	defer cleanup()
+
+	if err := os.MkdirAll(filepath.Join(cfg.Agents.Defaults.Workspace, "skills", "finance-news"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(skill) error = %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(cfg.Agents.Defaults.Workspace, "skills", "finance-news", "SKILL.md"),
+		[]byte("# Finance News\n\nUse web tools for current finance updates.\n"),
+		0o644,
+	); err != nil {
+		t.Fatalf("WriteFile(SKILL.md) error = %v", err)
+	}
+
+	agent := al.GetRegistry().GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("expected default agent")
+	}
+
+	opts := &processOptions{SessionKey: "agent:main:test"}
+	matched, handled, reply := al.applyExplicitSkillCommand("/use finance-news", agent, opts)
+	if !matched {
+		t.Fatal("expected /use command to match")
+	}
+	if !handled {
+		t.Fatal("expected /use without inline message to be handled immediately")
+	}
+	if !strings.Contains(reply, `Skill "finance-news" is armed for your next message`) {
+		t.Fatalf("unexpected reply: %q", reply)
+	}
+
+	pending := al.takePendingSkills(opts.SessionKey)
+	if len(pending) != 1 || pending[0] != "finance-news" {
+		t.Fatalf("pending skills = %#v, want [finance-news]", pending)
+	}
+}
+
+func TestApplyExplicitSkillCommand_InlineMessageMutatesOptions(t *testing.T) {
+	al, cfg, _, _, cleanup := newTestAgentLoop(t)
+	defer cleanup()
+
+	if err := os.MkdirAll(filepath.Join(cfg.Agents.Defaults.Workspace, "skills", "finance-news"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(skill) error = %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(cfg.Agents.Defaults.Workspace, "skills", "finance-news", "SKILL.md"),
+		[]byte("# Finance News\n\nUse web tools for current finance updates.\n"),
+		0o644,
+	); err != nil {
+		t.Fatalf("WriteFile(SKILL.md) error = %v", err)
+	}
+
+	agent := al.GetRegistry().GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("expected default agent")
+	}
+
+	opts := &processOptions{
+		SessionKey:  "agent:main:test",
+		UserMessage: "/use finance-news dammi le ultime news",
+	}
+	matched, handled, reply := al.applyExplicitSkillCommand(opts.UserMessage, agent, opts)
+	if !matched {
+		t.Fatal("expected /use command to match")
+	}
+	if handled {
+		t.Fatal("expected /use with inline message to fall through into normal agent execution")
+	}
+	if reply != "" {
+		t.Fatalf("unexpected reply: %q", reply)
+	}
+	if opts.UserMessage != "dammi le ultime news" {
+		t.Fatalf("opts.UserMessage = %q, want %q", opts.UserMessage, "dammi le ultime news")
+	}
+	if len(opts.ForcedSkills) != 1 || opts.ForcedSkills[0] != "finance-news" {
+		t.Fatalf("opts.ForcedSkills = %#v, want [finance-news]", opts.ForcedSkills)
+	}
+}
+
 func TestRecordLastChannel(t *testing.T) {
 	al, cfg, msgBus, provider, cleanup := newTestAgentLoop(t)
 	defer cleanup()
@@ -381,7 +461,7 @@ func TestProcessMessage_MediaToolHandledSkipsFollowUpLLMAndFinalText(t *testing.
 		t.Fatal("expected session history to be saved")
 	}
 	last := history[len(history)-1]
-	if last.Role != "assistant" || last.Content != handledToolResponseSummary {
+	if last.Role != "assistant" || last.Content != "Requested output delivered via tool attachment." {
 		t.Fatalf("expected handled assistant summary in history, got %+v", last)
 	}
 }
