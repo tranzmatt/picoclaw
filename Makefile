@@ -9,6 +9,11 @@ EXT=
 
 ifeq ($(OS),Windows_NT)
 	POWERSHELL=powershell -NoProfile -Command
+<<<<<<< HEAD
+=======
+	GO=go
+	WEB_GO=go
+>>>>>>> 83c79087 (Fix Windows build flow)
 	WINDOWS_GOARCH_RAW:=$(strip $(shell go env GOARCH 2>NUL))
 endif
 
@@ -40,7 +45,10 @@ GOFLAGS?=-v -tags $(GO_BUILD_TAGS)
 GOCACHE?=$(CURDIR)/.cache/go-build
 GOMODCACHE?=$(CURDIR)/.cache/go-mod
 GOTOOLCHAIN?=local
+<<<<<<< HEAD
 export CGO_ENABLED
+=======
+>>>>>>> 83c79087 (Fix Windows build flow)
 export GOCACHE
 export GOMODCACHE
 export GOTOOLCHAIN
@@ -207,7 +215,16 @@ build-launcher:
 	@echo "Building picoclaw-launcher for $(PLATFORM)/$(ARCH)..."
 ifeq ($(OS),Windows_NT)
 	@$(POWERSHELL) "New-Item -ItemType Directory -Force -Path '$(BUILD_DIR)' | Out-Null"
+<<<<<<< HEAD
 	@$(MAKE) -C web build PLATFORM="$(PLATFORM)" ARCH="$(ARCH)" EXT="$(EXT)" OUTPUT="$(CURDIR)/$(BUILD_DIR)/picoclaw-launcher-$(PLATFORM)-$(ARCH)$(EXT)" GO_BUILD_TAGS="$(GO_BUILD_TAGS)"
+=======
+	@$(MAKE) -C web build \
+		PLATFORM="$(PLATFORM)" \
+		ARCH="$(ARCH)" \
+		EXT="$(EXT)" \
+		OUTPUT="$(CURDIR)/$(BUILD_DIR)/picoclaw-launcher-$(PLATFORM)-$(ARCH)$(EXT)" \
+		GO_BUILD_TAGS="$(GO_BUILD_TAGS)"
+>>>>>>> 83c79087 (Fix Windows build flow)
 	@$(POWERSHELL) "Copy-Item -LiteralPath '$(BUILD_DIR)/picoclaw-launcher-$(PLATFORM)-$(ARCH)$(EXT)' -Destination '$(BUILD_DIR)/picoclaw-launcher$(EXT)' -Force"
 else
 	@mkdir -p $(BUILD_DIR)
