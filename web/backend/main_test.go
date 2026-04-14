@@ -250,8 +250,15 @@ func TestWildcardAdvertiseIP(t *testing.T) {
 		want      string
 	}{
 		{
-			name:      "ipv4 wildcard prefers ipv6 when available",
+			name:      "ipv4 wildcard uses ipv4",
 			bindHosts: []string{"0.0.0.0"},
+			ipv4:      "192.168.1.2",
+			ipv6:      "2001:db8::1",
+			want:      "192.168.1.2",
+		},
+		{
+			name:      "dual wildcard prefers ipv6",
+			bindHosts: []string{"0.0.0.0", "::"},
 			ipv4:      "192.168.1.2",
 			ipv6:      "2001:db8::1",
 			want:      "2001:db8::1",
@@ -264,11 +271,18 @@ func TestWildcardAdvertiseIP(t *testing.T) {
 			want:      "2001:db8::1",
 		},
 		{
-			name:      "ipv6 wildcard falls back to ipv4",
-			bindHosts: []string{"::"},
+			name:      "dual wildcard falls back to ipv4 when ipv6 missing",
+			bindHosts: []string{"0.0.0.0", "::"},
 			ipv4:      "192.168.1.2",
 			ipv6:      "",
 			want:      "192.168.1.2",
+		},
+		{
+			name:      "ipv6 wildcard without ipv6 does not advertise ipv4",
+			bindHosts: []string{"::"},
+			ipv4:      "192.168.1.2",
+			ipv6:      "",
+			want:      "",
 		},
 		{
 			name:      "non wildcard does not advertise",

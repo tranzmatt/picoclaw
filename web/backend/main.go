@@ -124,15 +124,49 @@ func hasWildcardBindHosts(bindHosts []string) bool {
 	return false
 }
 
-func wildcardAdvertiseIP(bindHosts []string, ipv4, ipv6 string) string {
-	if !hasWildcardBindHosts(bindHosts) {
-		return ""
+func wildcardBindHostFamilies(bindHosts []string) (hasIPv4, hasIPv6 bool) {
+	for _, bindHost := range bindHosts {
+		host := strings.TrimSpace(bindHost)
+		if host == "" {
+			continue
+		}
+
+		if !netbind.IsUnspecifiedHost(host) {
+			continue
+		}
+
+		ip := net.ParseIP(strings.Trim(host, "[]"))
+		if ip == nil {
+			continue
+		}
+		if ip.To4() != nil {
+			hasIPv4 = true
+			continue
+		}
+		hasIPv6 = true
 	}
 
-	if v6 := strings.TrimSpace(ipv6); v6 != "" {
+	return hasIPv4, hasIPv6
+}
+
+func wildcardAdvertiseIP(bindHosts []string, ipv4, ipv6 string) string {
+	hasIPv4Wildcard, hasIPv6Wildcard := wildcardBindHostFamilies(bindHosts)
+	v4 := strings.TrimSpace(ipv4)
+	v6 := strings.TrimSpace(ipv6)
+
+	switch {
+	case hasIPv4Wildcard && hasIPv6Wildcard:
+		if v6 != "" {
+			return v6
+		}
+		return v4
+	case hasIPv6Wildcard:
 		return v6
+	case hasIPv4Wildcard:
+		return v4
+	default:
+		return ""
 	}
-	return strings.TrimSpace(ipv4)
 }
 
 func advertiseIPForWildcardBindHosts(bindHosts []string) string {
