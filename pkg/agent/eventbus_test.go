@@ -670,8 +670,13 @@ func TestAgentLoop_EmitsFollowUpQueuedEvent(t *testing.T) {
 		t.Fatal("expected default agent")
 	}
 
-	sub := al.SubscribeEvents(32)
-	defer al.UnsubscribeEvents(sub.ID)
+	runtimeCh, closeRuntimeEvents := subscribeRuntimeEventsForTest(
+		t,
+		al,
+		32,
+		runtimeevents.KindAgentFollowUpQueued,
+	)
+	defer closeRuntimeEvents()
 
 	resp, err := al.runAgentLoop(context.Background(), defaultAgent, processOptions{
 		SessionKey:      "session-1",
@@ -695,8 +700,8 @@ func TestAgentLoop_EmitsFollowUpQueuedEvent(t *testing.T) {
 		t.Fatal("timeout waiting for async tool completion")
 	}
 
-	followUpEvt := waitForEvent(t, sub.C, 2*time.Second, func(evt Event) bool {
-		return evt.Kind == EventKindFollowUpQueued
+	followUpEvt := waitForRuntimeEvent(t, runtimeCh, 2*time.Second, func(evt runtimeevents.Event) bool {
+		return evt.Kind == runtimeevents.KindAgentFollowUpQueued
 	})
 	payload, ok := followUpEvt.Payload.(FollowUpQueuedPayload)
 	if !ok {
@@ -708,10 +713,10 @@ func TestAgentLoop_EmitsFollowUpQueuedEvent(t *testing.T) {
 	if payload.ContentLen != len("background result") {
 		t.Fatalf("expected content len %d, got %d", len("background result"), payload.ContentLen)
 	}
-	if followUpEvt.Meta.SessionKey != "session-1" {
-		t.Fatalf("expected session key session-1, got %q", followUpEvt.Meta.SessionKey)
+	if followUpEvt.Scope.SessionKey != "session-1" {
+		t.Fatalf("expected session key session-1, got %q", followUpEvt.Scope.SessionKey)
 	}
-	if followUpEvt.Meta.TurnID == "" {
+	if followUpEvt.Scope.TurnID == "" {
 		t.Fatal("expected follow-up event to include turn id")
 	}
 }

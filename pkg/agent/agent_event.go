@@ -166,6 +166,8 @@ func (al *AgentLoop) UnmountHook(name string) {
 }
 
 // SubscribeEvents registers a subscriber for agent-loop events.
+//
+// Deprecated: use RuntimeEvents for new event observation code.
 func (al *AgentLoop) SubscribeEvents(buffer int) EventSubscription {
 	if al == nil || al.eventBus == nil {
 		ch := make(chan Event)
@@ -176,6 +178,8 @@ func (al *AgentLoop) SubscribeEvents(buffer int) EventSubscription {
 }
 
 // UnsubscribeEvents removes a previously registered event subscriber.
+//
+// Deprecated: use the Subscription returned by RuntimeEvents instead.
 func (al *AgentLoop) UnsubscribeEvents(id uint64) {
 	if al == nil || al.eventBus == nil {
 		return
@@ -184,6 +188,8 @@ func (al *AgentLoop) UnsubscribeEvents(id uint64) {
 }
 
 // EventDrops returns the number of dropped events for the given kind.
+//
+// Deprecated: use RuntimeEventStats for runtime event drop counters.
 func (al *AgentLoop) EventDrops(kind EventKind) int64 {
 	if al == nil || al.eventBus == nil {
 		return 0

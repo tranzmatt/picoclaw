@@ -6,6 +6,10 @@ import (
 )
 
 // EventKind identifies a structured agent-loop event.
+//
+// Deprecated: use github.com/sipeed/picoclaw/pkg/events.Kind for new runtime
+// event consumers. This legacy kind exists only during the runtime event
+// migration window.
 type EventKind uint8
 
 const (
@@ -82,6 +86,9 @@ func (k EventKind) String() string {
 }
 
 // Event is the structured envelope broadcast by the agent EventBus.
+//
+// Deprecated: use github.com/sipeed/picoclaw/pkg/events.Event for new
+// observation code. Agent payload types remain supported.
 type Event struct {
 	Kind    EventKind
 	Time    time.Time

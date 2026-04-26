@@ -9,6 +9,8 @@ import (
 const defaultEventSubscriberBuffer = 16
 
 // EventSubscription identifies a subscriber channel returned by EventBus.Subscribe.
+//
+// Deprecated: use pkg/events.Subscription from RuntimeEvents for new code.
 type EventSubscription struct {
 	ID uint64
 	C  <-chan Event
@@ -19,6 +21,9 @@ type eventSubscriber struct {
 }
 
 // EventBus is a lightweight multi-subscriber broadcaster for agent-loop events.
+//
+// Deprecated: use pkg/events.EventBus for new code. This legacy bus remains
+// only while existing agent event consumers migrate.
 type EventBus struct {
 	mu      sync.RWMutex
 	subs    map[uint64]eventSubscriber
@@ -28,6 +33,8 @@ type EventBus struct {
 }
 
 // NewEventBus creates a new in-process event broadcaster.
+//
+// Deprecated: use events.NewBus for new runtime event publishers.
 func NewEventBus() *EventBus {
 	return &EventBus{
 		subs: make(map[uint64]eventSubscriber),

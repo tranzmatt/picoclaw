@@ -73,6 +73,7 @@ func NamedHook(name string, hook any) HookRegistration {
 }
 
 type EventObserver interface {
+	// Deprecated: implement RuntimeEventObserver for new observation code.
 	OnEvent(ctx context.Context, evt Event) error
 }
 
