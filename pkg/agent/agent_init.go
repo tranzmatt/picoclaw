@@ -49,8 +49,6 @@ func NewAgentLoop(
 		stateManager = state.NewManager(defaultAgent.Workspace)
 	}
 
-	eventBus := NewEventBus()
-
 	// Determine worker pool size from config (default: 1 = sequential)
 	workerPoolSize := cfg.Agents.Defaults.MaxParallelTurns
 	if workerPoolSize <= 0 {
@@ -62,7 +60,6 @@ func NewAgentLoop(
 		cfg:               cfg,
 		registry:          registry,
 		state:             stateManager,
-		eventBus:          eventBus,
 		fallback:          fallbackChain,
 		cmdRegistry:       commands.NewRegistry(commands.BuiltinDefinitions()),
 		steering:          newSteeringQueue(parseSteeringMode(cfg.Agents.Defaults.SteeringMode)),
@@ -79,7 +76,7 @@ func NewAgentLoop(
 		al.ownsRuntimeEvents = true
 	}
 	al.providerFactory = providers.CreateProviderFromConfig
-	al.hooks = NewHookManagerWithRuntimeEvents(eventBus, al.runtimeEvents.Channel())
+	al.hooks = NewHookManager(al.runtimeEvents.Channel())
 	configureHookManagerFromConfig(al.hooks, cfg)
 	al.contextManager = al.resolveContextManager()
 

@@ -152,18 +152,7 @@ func (h *llmObserverHook) AfterLLM(
 }
 
 type dualRuntimeObserverHook struct {
-	legacyCh  chan Event
 	runtimeCh chan runtimeevents.Event
-}
-
-func (h *dualRuntimeObserverHook) OnEvent(ctx context.Context, evt Event) error {
-	if evt.Kind == EventKindTurnEnd {
-		select {
-		case h.legacyCh <- evt:
-		default:
-		}
-	}
-	return nil
 }
 
 func (h *dualRuntimeObserverHook) OnRuntimeEvent(ctx context.Context, evt runtimeevents.Event) error {
@@ -522,13 +511,12 @@ func TestAgentLoop_Hooks_ObserverAndLLMInterceptor(t *testing.T) {
 	}
 }
 
-func TestAgentLoop_Hooks_RuntimeObserverPreferredOverLegacyObserver(t *testing.T) {
+func TestAgentLoop_Hooks_RuntimeObserverReceivesEvents(t *testing.T) {
 	provider := &llmHookTestProvider{}
 	al, agent, cleanup := newHookTestLoop(t, provider)
 	defer cleanup()
 
 	hook := &dualRuntimeObserverHook{
-		legacyCh:  make(chan Event, 1),
 		runtimeCh: make(chan runtimeevents.Event, 1),
 	}
 	if err := al.MountHook(NamedHook("runtime-observer", hook)); err != nil {
@@ -572,12 +560,6 @@ func TestAgentLoop_Hooks_RuntimeObserverPreferredOverLegacyObserver(t *testing.T
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for runtime observer event")
-	}
-
-	select {
-	case evt := <-hook.legacyCh:
-		t.Fatalf("legacy observer unexpectedly received %v", evt.Kind)
-	case <-time.After(100 * time.Millisecond):
 	}
 }
 

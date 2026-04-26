@@ -184,19 +184,6 @@ func (ph *ProcessHook) Close() error {
 	return ph.closeErr
 }
 
-func (ph *ProcessHook) OnEvent(ctx context.Context, evt Event) error {
-	if ph == nil || !ph.opts.Observe {
-		return nil
-	}
-	if len(ph.observeKinds) > 0 {
-		kind := runtimeKindForAgentEvent(evt.Kind).String()
-		if _, ok := ph.observeKinds[kind]; !ok {
-			return nil
-		}
-	}
-	return ph.notify(ctx, "hook.event", evt)
-}
-
 func (ph *ProcessHook) OnRuntimeEvent(ctx context.Context, evt runtimeevents.Event) error {
 	if ph == nil || !ph.opts.Observe {
 		return nil

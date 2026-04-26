@@ -38,8 +38,7 @@ type AgentLoop struct {
 	registry *AgentRegistry
 	state    *state.Manager
 
-	// Event system (from Incoming)
-	eventBus          *EventBus
+	// Runtime event system
 	runtimeEvents     runtimeevents.Bus
 	ownsRuntimeEvents bool
 	hooks             *HookManager
@@ -286,9 +285,6 @@ func (al *AgentLoop) Close() {
 	if al.hooks != nil {
 		al.hooks.Close()
 	}
-	if al.eventBus != nil {
-		al.eventBus.Close()
-	}
 	if al.runtimeEvents != nil && al.ownsRuntimeEvents {
 		if err := al.runtimeEvents.Close(); err != nil {
 			logger.ErrorCF("agent", "Failed to close runtime event bus",
@@ -302,12 +298,6 @@ func (al *AgentLoop) Close() {
 // MountHook registers an in-process hook on the agent loop.
 
 // UnmountHook removes a previously registered in-process hook.
-
-// SubscribeEvents registers a subscriber for agent-loop events.
-
-// UnsubscribeEvents removes a previously registered event subscriber.
-
-// EventDrops returns the number of dropped events for the given kind.
 
 type turnEventScope struct {
 	agentID    string

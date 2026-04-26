@@ -46,9 +46,6 @@ func (al *AgentLoop) emitEvent(kind EventKind, meta EventMeta, payload any) {
 
 	al.logEvent(evt)
 
-	if al.eventBus != nil {
-		al.eventBus.Emit(evt)
-	}
 	al.publishRuntimeEvent(evt)
 }
 
@@ -163,38 +160,6 @@ func (al *AgentLoop) UnmountHook(name string) {
 		return
 	}
 	al.hooks.Unmount(name)
-}
-
-// SubscribeEvents registers a subscriber for agent-loop events.
-//
-// Deprecated: use RuntimeEvents for new event observation code.
-func (al *AgentLoop) SubscribeEvents(buffer int) EventSubscription {
-	if al == nil || al.eventBus == nil {
-		ch := make(chan Event)
-		close(ch)
-		return EventSubscription{C: ch}
-	}
-	return al.eventBus.Subscribe(buffer)
-}
-
-// UnsubscribeEvents removes a previously registered event subscriber.
-//
-// Deprecated: use the Subscription returned by RuntimeEvents instead.
-func (al *AgentLoop) UnsubscribeEvents(id uint64) {
-	if al == nil || al.eventBus == nil {
-		return
-	}
-	al.eventBus.Unsubscribe(id)
-}
-
-// EventDrops returns the number of dropped events for the given kind.
-//
-// Deprecated: use RuntimeEventStats for runtime event drop counters.
-func (al *AgentLoop) EventDrops(kind EventKind) int64 {
-	if al == nil || al.eventBus == nil {
-		return 0
-	}
-	return al.eventBus.Dropped(kind)
 }
 
 // RuntimeEvents returns the root runtime event channel.

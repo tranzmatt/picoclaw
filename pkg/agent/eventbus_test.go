@@ -16,73 +16,16 @@ import (
 	"github.com/sipeed/picoclaw/pkg/tools"
 )
 
-func TestEventBus_SubscribeEmitUnsubscribeClose(t *testing.T) {
-	eventBus := NewEventBus()
-	sub := eventBus.Subscribe(1)
-
-	eventBus.Emit(Event{
-		Kind: EventKindTurnStart,
-		Meta: EventMeta{TurnID: "turn-1"},
-	})
-
-	select {
-	case evt := <-sub.C:
-		if evt.Kind != EventKindTurnStart {
-			t.Fatalf("expected %v, got %v", EventKindTurnStart, evt.Kind)
-		}
-		if evt.Meta.TurnID != "turn-1" {
-			t.Fatalf("expected turn id turn-1, got %q", evt.Meta.TurnID)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for event")
-	}
-
-	eventBus.Unsubscribe(sub.ID)
-	if _, ok := <-sub.C; ok {
-		t.Fatal("expected subscriber channel to be closed after unsubscribe")
-	}
-
-	eventBus.Close()
-	closedSub := eventBus.Subscribe(1)
-	if _, ok := <-closedSub.C; ok {
-		t.Fatal("expected closed bus to return a closed subscriber channel")
-	}
-}
-
-func TestEventBus_DropsWhenSubscriberIsFull(t *testing.T) {
-	eventBus := NewEventBus()
-	sub := eventBus.Subscribe(1)
-	defer eventBus.Unsubscribe(sub.ID)
-
-	start := time.Now()
-	for i := 0; i < 1000; i++ {
-		eventBus.Emit(Event{Kind: EventKindLLMRequest})
-	}
-
-	if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
-		t.Fatalf("Emit took too long with a blocked subscriber: %s", elapsed)
-	}
-
-	if got := eventBus.Dropped(EventKindLLMRequest); got != 999 {
-		t.Fatalf("expected 999 dropped events, got %d", got)
-	}
-}
-
-func TestAgentLoop_DualPublishesRuntimeEvents(t *testing.T) {
+func TestAgentLoop_PublishesRuntimeEvents(t *testing.T) {
 	runtimeBus := runtimeevents.NewBus()
 	al := &AgentLoop{
-		eventBus:      NewEventBus(),
 		runtimeEvents: runtimeBus,
 	}
-	defer al.eventBus.Close()
 	defer func() {
 		if err := runtimeBus.Close(); err != nil {
 			t.Errorf("runtime bus close failed: %v", err)
 		}
 	}()
-
-	legacySub := al.SubscribeEvents(1)
-	defer al.UnsubscribeEvents(legacySub.ID)
 
 	runtimeSub, runtimeCh, err := al.RuntimeEvents().OfKind(runtimeevents.KindAgentToolExecStart).SubscribeChan(
 		context.Background(),
@@ -121,11 +64,6 @@ func TestAgentLoop_DualPublishesRuntimeEvents(t *testing.T) {
 		},
 		ToolExecStartPayload{Tool: "mock_custom", Arguments: map[string]any{"task": "ping"}},
 	)
-
-	legacyEvt := receiveLegacyEvent(t, legacySub.C)
-	if legacyEvt.Kind != EventKindToolExecStart {
-		t.Fatalf("legacy kind = %v, want %v", legacyEvt.Kind, EventKindToolExecStart)
-	}
 
 	runtimeEvt := receiveRuntimeEvent(t, runtimeCh)
 	if runtimeEvt.Kind != runtimeevents.KindAgentToolExecStart {
@@ -733,21 +671,6 @@ func TestAgentLoop_EmitsFollowUpQueuedEvent(t *testing.T) {
 	}
 	if followUpEvt.Scope.TurnID == "" {
 		t.Fatal("expected follow-up event to include turn id")
-	}
-}
-
-func receiveLegacyEvent(t *testing.T, ch <-chan Event) Event {
-	t.Helper()
-
-	select {
-	case evt, ok := <-ch:
-		if !ok {
-			t.Fatal("legacy event stream closed before expected event arrived")
-		}
-		return evt
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for legacy event")
-		return Event{}
 	}
 }
 

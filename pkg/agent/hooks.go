@@ -72,11 +72,6 @@ func NamedHook(name string, hook any) HookRegistration {
 	}
 }
 
-type EventObserver interface {
-	// Deprecated: implement RuntimeEventObserver for new observation code.
-	OnEvent(ctx context.Context, evt Event) error
-}
-
 type RuntimeEventObserver interface {
 	OnRuntimeEvent(ctx context.Context, evt runtimeevents.Event) error
 }
@@ -198,7 +193,6 @@ func (r *ToolResultHookResponse) Clone() *ToolResultHookResponse {
 }
 
 type HookManager struct {
-	eventBus           *EventBus
 	runtimeEvents      runtimeevents.EventChannel
 	observerTimeout    time.Duration
 	interceptorTimeout time.Duration
@@ -208,35 +202,19 @@ type HookManager struct {
 	hooks   map[string]HookRegistration
 	ordered []HookRegistration
 
-	sub                   EventSubscription
-	runtimeSub            runtimeevents.Subscription
-	done                  chan struct{}
-	runtimeDone           chan struct{}
-	runtimeObserveEnabled bool
-	closeOnce             sync.Once
+	runtimeSub  runtimeevents.Subscription
+	runtimeDone chan struct{}
+	closeOnce   sync.Once
 }
 
-func NewHookManager(eventBus *EventBus) *HookManager {
-	return NewHookManagerWithRuntimeEvents(eventBus, nil)
-}
-
-func NewHookManagerWithRuntimeEvents(eventBus *EventBus, runtimeEvents runtimeevents.EventChannel) *HookManager {
+func NewHookManager(runtimeEvents runtimeevents.EventChannel) *HookManager {
 	hm := &HookManager{
-		eventBus:           eventBus,
 		runtimeEvents:      runtimeEvents,
 		observerTimeout:    defaultHookObserverTimeout,
 		interceptorTimeout: defaultHookInterceptorTimeout,
 		approvalTimeout:    defaultHookApprovalTimeout,
 		hooks:              make(map[string]HookRegistration),
-		done:               make(chan struct{}),
 		runtimeDone:        make(chan struct{}),
-	}
-
-	if eventBus != nil {
-		hm.sub = eventBus.Subscribe(hookObserverBufferSize)
-		go hm.dispatchEvents()
-	} else {
-		close(hm.done)
 	}
 
 	if runtimeEvents != nil {
@@ -251,7 +229,6 @@ func NewHookManagerWithRuntimeEvents(eventBus *EventBus, runtimeEvents runtimeev
 			close(hm.runtimeDone)
 		} else {
 			hm.runtimeSub = sub
-			hm.runtimeObserveEnabled = true
 			go hm.dispatchRuntimeEvents(ch)
 		}
 	} else {
@@ -267,9 +244,6 @@ func (hm *HookManager) Close() {
 	}
 
 	hm.closeOnce.Do(func() {
-		if hm.eventBus != nil {
-			hm.eventBus.Unsubscribe(hm.sub.ID)
-		}
 		if hm.runtimeSub != nil {
 			if err := hm.runtimeSub.Close(); err != nil {
 				logger.WarnCF("hooks", "Failed to close runtime event hook subscription", map[string]any{
@@ -277,7 +251,6 @@ func (hm *HookManager) Close() {
 				})
 			}
 		}
-		<-hm.done
 		<-hm.runtimeDone
 		hm.closeAllHooks()
 	})
@@ -333,25 +306,6 @@ func (hm *HookManager) Unmount(name string) {
 	}
 	delete(hm.hooks, name)
 	hm.rebuildOrdered()
-}
-
-func (hm *HookManager) dispatchEvents() {
-	defer close(hm.done)
-
-	for evt := range hm.sub.C {
-		for _, reg := range hm.snapshotHooks() {
-			if hm.runtimeObserveEnabled {
-				if _, ok := reg.Hook.(RuntimeEventObserver); ok {
-					continue
-				}
-			}
-			observer, ok := reg.Hook.(EventObserver)
-			if !ok {
-				continue
-			}
-			hm.runObserver(reg.Name, observer, evt)
-		}
-	}
 }
 
 func (hm *HookManager) dispatchRuntimeEvents(ch <-chan runtimeevents.Event) {
@@ -641,33 +595,6 @@ func (hm *HookManager) closeAllHooks() {
 		delete(hm.hooks, name)
 	}
 	hm.ordered = nil
-}
-
-func (hm *HookManager) runObserver(name string, observer EventObserver, evt Event) {
-	ctx, cancel := context.WithTimeout(context.Background(), hm.observerTimeout)
-	defer cancel()
-
-	done := make(chan error, 1)
-	go func() {
-		done <- observer.OnEvent(ctx, evt)
-	}()
-
-	select {
-	case err := <-done:
-		if err != nil {
-			logger.WarnCF("hooks", "Event observer failed", map[string]any{
-				"hook":  name,
-				"event": evt.Kind.String(),
-				"error": err.Error(),
-			})
-		}
-	case <-ctx.Done():
-		logger.WarnCF("hooks", "Event observer timed out", map[string]any{
-			"hook":       name,
-			"event":      evt.Kind.String(),
-			"timeout_ms": hm.observerTimeout.Milliseconds(),
-		})
-	}
 }
 
 func (hm *HookManager) runRuntimeObserver(
