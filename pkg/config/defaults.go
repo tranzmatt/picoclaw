@@ -296,6 +296,9 @@ func DefaultConfig() *Config {
 			HotReload: false,
 			LogLevel:  DefaultGatewayLogLevel,
 		},
+		Events: EventsConfig{
+			Logging: defaultEventLoggingConfig(),
+		},
 		Tools: ToolsConfig{
 			FilterSensitiveData: true,
 			FilterMinLength:     8,
